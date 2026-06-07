@@ -36,6 +36,7 @@
   input::placeholder { color:var(--dim); }
   #title { padding-right:52px; }
   #artist-wrap { flex:1.4; min-width:140px; }
+  #album-wrap { flex:1.4; min-width:140px; }
   .counter { position:absolute; right:12px; top:50%; transform:translateY(-50%); font-size:11px; font-weight:600; letter-spacing:.04em; pointer-events:none; color:var(--dim); }
   .counter.full { color:var(--accent); }
   .sliders { display:flex; flex-direction:column; gap:18px; }
@@ -95,6 +96,8 @@
   .song-actions { display:flex; flex-direction:column; gap:8px; flex-shrink:0; }
   .icon-btn { background:transparent; border:1px solid var(--line); color:var(--muted); border-radius:8px; padding:6px 12px; font-size:12px; font-weight:600; }
   .icon-btn.danger { color:#e8617a; border-color:#3a2622; }
+  .icon-btn.armed { background:#e8617a; color:var(--bg); border-color:#e8617a; }
+  .artist-filter { background:var(--bg); border:1px solid var(--line); color:var(--cream); border-radius:20px; padding:6px 12px; font-size:13px; font-weight:600; font-family:inherit; max-width:180px; }
   .hidden { display:none !important; }
 </style>
 </head>
@@ -132,6 +135,7 @@
         <span class="counter" id="counter">0/70</span>
       </div>
       <div id="artist-wrap"><input type="text" id="artist" placeholder="Artist" /></div>
+      <div id="album-wrap"><input type="text" id="album" placeholder="Album" /></div>
     </div>
     <div class="sliders" id="sliders"></div>
     <div class="form-footer">
@@ -168,7 +172,7 @@ const DIMENSIONS = [
 ];
 const MIN=1, MAX=20, STEP=0.5, TITLE_MAX=70, MAX_TOTAL=MAX*DIMENSIONS.length;
 
-let songs = [], editingId = null, sortBy = "recent", session = null;
+let songs = [], editingId = null, sortBy = "recent", session = null, artistFilter = "__all__";
 
 // ── Helpers ──────────────────────────────────────────────────
 const totalOf = s => DIMENSIONS.reduce((a,d)=>a+Number(s[d.key]),0);
@@ -253,7 +257,7 @@ function buildSliders(){
     </div>`).join("");
   DIMENSIONS.forEach(d => $("rng-"+d.key).addEventListener("input", refreshDraft));
 }
-function readDraft(){ const d={ title:$("title").value, artist:$("artist").value }; DIMENSIONS.forEach(x=>d[x.key]=Number($("rng-"+x.key).value)); return d; }
+function readDraft(){ const d={ title:$("title").value, artist:$("artist").value, album:$("album").value }; DIMENSIONS.forEach(x=>d[x.key]=Number($("rng-"+x.key).value)); return d; }
 function refreshDraft(){
   const d=readDraft();
   DIMENSIONS.forEach(x=>$("val-"+x.key).textContent=d[x.key]);
@@ -265,13 +269,13 @@ function refreshDraft(){
   $("save-btn").disabled=!t.trim();
 }
 function resetForm(){
-  $("title").value=""; $("artist").value="";
+  $("title").value=""; $("artist").value=""; $("album").value="";
   DIMENSIONS.forEach(d=>$("rng-"+d.key).value=10);
   editingId=null; $("form-label").textContent="Rate a song";
   $("save-btn").textContent="Add to ledger"; $("cancel-btn").style.display="none"; refreshDraft();
 }
 function startEdit(s){
-  $("title").value=s.title; $("artist").value=s.artist||"";
+  $("title").value=s.title; $("artist").value=s.artist||""; $("album").value=s.album||"";
   DIMENSIONS.forEach(d=>$("rng-"+d.key).value=Number(s[d.key]));
   editingId=s.id; $("form-label").textContent="Editing rating";
   $("save-btn").textContent="Update"; $("cancel-btn").style.display=""; refreshDraft();
@@ -279,7 +283,7 @@ function startEdit(s){
 }
 async function save(){
   const d=readDraft(); if(!d.title.trim()) return;
-  const payload={ title:d.title.trim(), artist:d.artist.trim() };
+  const payload={ title:d.title.trim(), artist:d.artist.trim(), album:(d.album||"").trim() };
   DIMENSIONS.forEach(x=>payload[x.key]=d[x.key]);
   const btn=$("save-btn"); btn.disabled=true; btn.textContent="Saving…";
   try {
@@ -311,30 +315,44 @@ function renderSortBar(){
   const el=$("sort-bar");
   if(!songs.length){ el.innerHTML=""; return; }
   const opts=[{v:"recent",l:"Recent"},{v:"overall",l:"Overall"}].concat(DIMENSIONS.map(d=>({v:d.key,l:d.label})));
+  const artists=Array.from(new Set(songs.map(s=>s.artist).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  if(artistFilter!=="__all__" && !artists.includes(artistFilter)) artistFilter="__all__";
   el.className="sort-bar";
   el.innerHTML=`<span class="sort-label">Sort by</span>
     <div class="chips">${opts.map(o=>`<button class="chip ${sortBy===o.v?"active":""}" data-sort="${o.v}">${o.l}</button>`).join("")}</div>
+    <select class="artist-filter" id="artist-filter">
+      <option value="__all__">All artists</option>
+      ${artists.map(a=>`<option value="${esc(a)}" ${artistFilter===a?"selected":""}>${esc(a)}</option>`).join("")}
+    </select>
     <button class="export" id="export-btn">↓ Export CSV</button>`;
   el.querySelectorAll("[data-sort]").forEach(b=>b.addEventListener("click",()=>{sortBy=b.dataset.sort;renderAll();}));
+  $("artist-filter").addEventListener("change",e=>{ artistFilter=e.target.value; renderAll(); });
   $("export-btn").addEventListener("click",exportCSV);
 }
-function sortedSongs(){
-  const arr=songs.slice();
+function applySort(arr){
   if(sortBy==="recent") arr.sort((a,b)=>new Date(b.created_at)-new Date(a.created_at));
   else if(sortBy==="overall") arr.sort((a,b)=>overallOf(b)-overallOf(a));
   else arr.sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
   return arr;
 }
+function listView(){
+  let arr=songs.slice();
+  if(artistFilter && artistFilter!=="__all__") arr=arr.filter(s=>(s.artist||"")===artistFilter);
+  return applySort(arr);
+}
 function renderList(){
   const el=$("list");
   if(!songs.length){ el.innerHTML=`<div class="empty">No songs yet. Rate one above — it saves to your account and syncs to every device you sign in on.</div>`; return; }
-  el.innerHTML=sortedSongs().map(s=>{
+  const view=listView();
+  if(!view.length){ el.innerHTML=`<div class="empty">No songs by that artist.</div>`; return; }
+  el.innerHTML=view.map(s=>{
     const ov=overallOf(s);
+    const sub=[esc(s.artist),esc(s.album)].filter(Boolean).join(" · ");
     return `<article class="song">
       <div class="score-col"><div class="badge" style="border-color:${scoreHue(ov)}; color:${scoreHue(ov)}">${fmt(ov)}</div>
         <div class="total-cap">${totalOf(s)}<span class="max">/${MAX_TOTAL}</span></div></div>
       <div class="song-main">
-        <div class="song-head"><span class="song-title">${esc(s.title)}</span>${s.artist?`<span class="song-artist">— ${esc(s.artist)}</span>`:""}</div>
+        <div class="song-head"><span class="song-title">${esc(s.title)}</span>${sub?`<span class="song-artist">— ${sub}</span>`:""}</div>
         <div class="breakdown">${DIMENSIONS.map(d=>`<div><div class="bd-top"><span class="bd-label">${d.label}</span><span class="bd-val" style="color:${d.color}">${Number(s[d.key])}</span></div>
           <div class="bd-track"><div class="bd-fill" style="width:${Number(s[d.key])*5}%; background:${d.color}"></div></div></div>`).join("")}</div>
       </div>
@@ -342,15 +360,20 @@ function renderList(){
     </article>`;
   }).join("");
   el.querySelectorAll("[data-edit]").forEach(b=>b.addEventListener("click",()=>startEdit(songs.find(s=>s.id===b.dataset.edit))));
-  el.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>removeSong(b.dataset.del)));
+  el.querySelectorAll("[data-del]").forEach(b=>b.addEventListener("click",()=>{
+    if(b.dataset.armed==="1"){ removeSong(b.dataset.del); return; }
+    b.dataset.armed="1"; b.textContent="Confirm?"; b.classList.add("armed");
+    clearTimeout(b._t);
+    b._t=setTimeout(()=>{ b.dataset.armed="0"; b.textContent="Delete"; b.classList.remove("armed"); }, 3000);
+  }));
 }
 function renderAll(){ renderStats(); renderSortBar(); renderList(); }
 
 // ── CSV ──────────────────────────────────────────────────────
 function exportCSV(){
-  const headers=["Title","Artist","Lyrics","Melody","Vocals","Emotiveness","Total","Overall","Added"];
+  const headers=["Title","Artist","Album","Lyrics","Melody","Vocals","Emotiveness","Total","Overall","Added"];
   const cell=v=>{const s=String(v ?? "");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;};
-  const rows=sortedSongs().map(s=>[s.title,s.artist||"",Number(s.lyrics),Number(s.melody),Number(s.vocals),Number(s.emotiveness),totalOf(s),fmt(overallOf(s)),s.created_at]);
+  const rows=applySort(songs.slice()).map(s=>[s.title,s.artist||"",s.album||"",Number(s.lyrics),Number(s.melody),Number(s.vocals),Number(s.emotiveness),totalOf(s),fmt(overallOf(s)),s.created_at]);
   const csv=[headers].concat(rows).map(r=>r.map(cell).join(",")).join("\n");
   const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
   const url=URL.createObjectURL(blob); const a=document.createElement("a");
