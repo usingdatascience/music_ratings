@@ -70,6 +70,24 @@
   .agg-track { flex:1; height:8px; background:var(--bg); border-radius:6px; overflow:hidden; }
   .agg-fill { height:100%; border-radius:6px; transition:width .4s ease; }
   .agg-val { width:34px; text-align:right; font-family:'Fraunces',serif; font-weight:600; font-size:15px; }
+  /* Insights */
+  .insights-card { display:block; background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:20px 24px; margin-bottom:18px; }
+  .insights-toggle { width:100%; text-align:left; background:transparent; border:none; color:var(--cream); font-family:'Fraunces',serif; font-size:20px; font-weight:600; padding:0; }
+  .ins-block { margin-top:22px; }
+  .ins-h { font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin-bottom:12px; }
+  .ins-note { font-size:12px; color:var(--dim); line-height:1.5; margin-top:10px; }
+  .radar-picks { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+  .radar-pick { display:flex; flex-direction:column; gap:4px; flex:1; min-width:130px; }
+  .radar-pick span { font-size:11px; color:var(--muted); }
+  .radar-pick select { background:var(--bg); border:1px solid var(--line); color:var(--cream); border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; }
+  .radar-wrap { display:flex; justify-content:center; }
+  .radar-legend { display:flex; gap:16px; justify-content:center; flex-wrap:wrap; margin-top:6px; font-size:12px; }
+  .radar-legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legdot { width:10px; height:10px; border-radius:2px; }
+  .heat { display:grid; grid-template-columns:auto repeat(4, 1fr); gap:4px; }
+  .heat-cell { aspect-ratio:1; display:flex; align-items:center; justify-content:center; border-radius:6px; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .heat-head { display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--muted); font-weight:600; }
+  .heat-rowhead { display:flex; align-items:center; justify-content:flex-end; padding-right:6px; font-size:11px; color:var(--muted); font-weight:600; }
   .sort-bar { display:flex; align-items:center; gap:14px; margin-bottom:16px; flex-wrap:wrap; }
   .sort-label { font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); }
   .chips { display:flex; gap:8px; flex-wrap:wrap; }
@@ -152,6 +170,7 @@
   </section>
 
   <section id="stats"></section>
+  <section id="insights"></section>
   <div id="sort-bar"></div>
   <section class="list" id="list"></section>
 </div>
@@ -173,6 +192,7 @@ const DIMENSIONS = [
 const MIN=1, MAX=20, STEP=0.5, TITLE_MAX=70, MAX_TOTAL=MAX*DIMENSIONS.length;
 
 let songs = [], editingId = null, sortBy = "recent", session = null, artistFilter = "__all__";
+let insightsOpen = false, radarA = null, radarB = "__none__";
 
 // ── Helpers ──────────────────────────────────────────────────
 const totalOf = s => DIMENSIONS.reduce((a,d)=>a+Number(s[d.key]),0);
@@ -367,7 +387,99 @@ function renderList(){
     b._t=setTimeout(()=>{ b.dataset.armed="0"; b.textContent="Delete"; b.classList.remove("armed"); }, 3000);
   }));
 }
-function renderAll(){ renderStats(); renderSortBar(); renderList(); }
+function renderAll(){ renderStats(); renderInsights(); renderSortBar(); renderList(); }
+
+// ── Insights: radar + correlation heatmap ───────────────────
+const getSong = id => songs.find(s=>s.id===id);
+
+function pearson(xs, ys){
+  const n=xs.length; if(n<2) return null;
+  const mx=xs.reduce((a,b)=>a+b,0)/n, my=ys.reduce((a,b)=>a+b,0)/n;
+  let num=0, dx=0, dy=0;
+  for(let i=0;i<n;i++){ const a=xs[i]-mx, b=ys[i]-my; num+=a*b; dx+=a*a; dy+=b*b; }
+  if(dx===0 || dy===0) return null; // no variance on an axis
+  return num/Math.sqrt(dx*dy);
+}
+
+function corrColor(r){
+  if(r===null) return "#241f1b";
+  if(r>=0){ const t=Math.min(r,1); return `rgba(78,201,176,${0.12+0.78*t})`; }
+  const t=Math.min(-r,1); return `rgba(255,107,74,${0.12+0.78*t})`;
+}
+
+function radarSVG(a, b){
+  const size=240, cx=size/2, cy=size/2, R=80;
+  const pt=(i,v)=>{ const ang=(-90+i*90)*Math.PI/180, r=(v/20)*R; return [cx+r*Math.cos(ang), cy+r*Math.sin(ang)]; };
+  const poly=s=>DIMENSIONS.map((d,i)=>pt(i,Number(s[d.key])).join(",")).join(" ");
+  const grid=[5,10,15,20].map(lv=>{
+    const p=DIMENSIONS.map((d,i)=>pt(i,lv).join(",")).join(" ");
+    return `<polygon points="${p}" fill="none" stroke="#2c2722" stroke-width="1"/>`;
+  }).join("");
+  const axes=DIMENSIONS.map((d,i)=>{ const [x,y]=pt(i,20); return `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}" stroke="#2c2722" stroke-width="1"/>`; }).join("");
+  const labels=DIMENSIONS.map((d,i)=>{ const [x,y]=pt(i,24); return `<text x="${x}" y="${y}" fill="#9a8f7f" font-size="11" text-anchor="middle" dominant-baseline="middle">${d.label}</text>`; }).join("");
+  let shapes=`<polygon points="${poly(a)}" fill="rgba(78,201,176,.22)" stroke="#4ec9b0" stroke-width="2"/>`;
+  if(b) shapes+=`<polygon points="${poly(b)}" fill="rgba(255,107,74,.18)" stroke="#ff6b4a" stroke-width="2"/>`;
+  return `<svg viewBox="0 0 ${size} ${size}" width="240" height="240">${grid}${axes}${labels}${shapes}</svg>`;
+}
+
+function insightsContent(){
+  // radar selectors
+  const list=applySort(songs.slice());
+  if(!radarA || !getSong(radarA)) radarA = list.length ? list[0].id : null;
+  const opt=(sel,extraNone)=> (extraNone?`<option value="__none__" ${sel==="__none__"?"selected":""}>— none —</option>`:"") +
+    list.map(s=>`<option value="${s.id}" ${sel===s.id?"selected":""}>${esc(s.title)}${s.artist?" · "+esc(s.artist):""}</option>`).join("");
+  const a=getSong(radarA), b=(radarB!=="__none__"?getSong(radarB):null);
+  const radar = `<div class="ins-block"><div class="ins-h">Song shape</div>
+    <div class="radar-picks">
+      <label class="radar-pick"><span>Song</span><select id="radar-a">${opt(radarA,false)}</select></label>
+      <label class="radar-pick"><span>Compare with</span><select id="radar-b">${opt(radarB,true)}</select></label>
+    </div>
+    <div class="radar-wrap">${a?radarSVG(a,b):""}</div>
+    <div class="radar-legend">
+      ${a?`<span><span class="legdot" style="background:#4ec9b0"></span>${esc(a.title)} · ${fmt(overallOf(a))}</span>`:""}
+      ${b?`<span><span class="legdot" style="background:#ff6b4a"></span>${esc(b.title)} · ${fmt(overallOf(b))}</span>`:""}
+    </div></div>`;
+
+  // correlation heatmap
+  let heat;
+  if(songs.length<3){
+    heat=`<div class="ins-block"><div class="ins-h">Dimension correlations</div>
+      <div class="ins-note">Need at least 3 songs to compute correlations — you have ${songs.length}. This panel fills in as you rate more.</div></div>`;
+  } else {
+    const cols=DIMENSIONS.map(d=>songs.map(s=>Number(s[d.key])));
+    const short={lyrics:"Lyr",melody:"Mel",vocals:"Voc",emotiveness:"Emo"};
+    let cells=`<div class="heat-cell" style="background:transparent"></div>` +
+      DIMENSIONS.map(d=>`<div class="heat-head">${short[d.key]}</div>`).join("");
+    DIMENSIONS.forEach((d,i)=>{
+      cells+=`<div class="heat-rowhead">${short[d.key]}</div>`;
+      DIMENSIONS.forEach((d2,j)=>{
+        const r = i===j ? 1 : pearson(cols[i], cols[j]);
+        const txt = r===null ? "–" : (i===j ? "1.00" : r.toFixed(2));
+        const col = i===j ? "rgba(243,236,225,.14)" : corrColor(r);
+        cells+=`<div class="heat-cell" style="background:${col}">${txt}</div>`;
+      });
+    });
+    heat=`<div class="ins-block"><div class="ins-h">Dimension correlations</div>
+      <div class="heat">${cells}</div>
+      <div class="ins-note">How your four axes move together across all ${songs.length} songs. Teal = move together, coral = move oppositely, faint = unrelated. A pair near +0.9 means you're effectively rating one thing twice. ${songs.length<10?"Still noisy at this sample size — read it loosely until ~25+ songs.":""}</div></div>`;
+  }
+  return radar + heat;
+}
+
+function wireInsights(){
+  const a=$("radar-a"), b=$("radar-b");
+  if(a) a.addEventListener("change",e=>{ radarA=e.target.value; renderInsights(); });
+  if(b) b.addEventListener("change",e=>{ radarB=e.target.value; renderInsights(); });
+}
+
+function renderInsights(){
+  const el=$("insights");
+  if(!songs.length){ el.className=""; el.innerHTML=""; return; }
+  el.className="insights-card";
+  el.innerHTML=`<button class="insights-toggle" id="insights-toggle">${insightsOpen?"▾":"▸"} Insights</button>${insightsOpen?insightsContent():""}`;
+  $("insights-toggle").addEventListener("click",()=>{ insightsOpen=!insightsOpen; renderInsights(); });
+  if(insightsOpen) wireInsights();
+}
 
 // ── CSV ──────────────────────────────────────────────────────
 function exportCSV(){
