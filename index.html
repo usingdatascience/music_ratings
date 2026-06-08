@@ -116,6 +116,10 @@
   .icon-btn.danger { color:#e8617a; border-color:#3a2622; }
   .icon-btn.armed { background:#e8617a; color:var(--bg); border-color:#e8617a; }
   .artist-filter { background:var(--bg); border:1px solid var(--line); color:var(--cream); border-radius:20px; padding:6px 12px; font-size:13px; font-weight:600; font-family:inherit; max-width:180px; }
+  .tabs { display:flex; gap:8px; margin:14px 0 4px; }
+  .tab { background:transparent; border:1px solid var(--line); color:var(--muted); border-radius:20px; padding:8px 20px; font-size:14px; font-weight:700; }
+  .tab.active { background:var(--cream); color:var(--bg); border-color:var(--cream); }
+  .rank { flex-shrink:0; width:42px; text-align:center; font-family:'Fraunces',serif; font-weight:900; font-size:24px; color:var(--muted); align-self:center; }
   .hidden { display:none !important; }
 </style>
 </head>
@@ -141,8 +145,10 @@
     <h1 class="wordmark">MusicRatings</h1>
     <div class="rule"></div>
     <div class="whoami"><span id="whoami-email"></span><a id="signout">Sign out</a></div>
+    <div class="tabs"><button class="tab active" id="tab-songs">Songs</button><button class="tab" id="tab-artists">Artists</button></div>
   </header>
 
+  <div id="songs-page">
   <div id="status" class="status"></div>
 
   <section class="card">
@@ -173,6 +179,12 @@
   <section id="insights"></section>
   <div id="sort-bar"></div>
   <section class="list" id="list"></section>
+  </div>
+
+  <div id="artists-page" class="hidden">
+    <div id="artist-controls"></div>
+    <section class="list" id="artist-list"></section>
+  </div>
 </div>
 
 <script>
@@ -193,6 +205,7 @@ const MIN=1, MAX=20, STEP=0.5, TITLE_MAX=70, MAX_TOTAL=MAX*DIMENSIONS.length;
 
 let songs = [], editingId = null, sortBy = "recent", session = null, artistFilter = "__all__";
 let insightsOpen = false, radarA = null, radarB = "__none__";
+let view = "songs", artistMetric = "overall", minSongs = 1;
 
 // ── Helpers ──────────────────────────────────────────────────
 const totalOf = s => DIMENSIONS.reduce((a,d)=>a+Number(s[d.key]),0);
@@ -387,7 +400,68 @@ function renderList(){
     b._t=setTimeout(()=>{ b.dataset.armed="0"; b.textContent="Delete"; b.classList.remove("armed"); }, 3000);
   }));
 }
-function renderAll(){ renderStats(); renderInsights(); renderSortBar(); renderList(); }
+function renderAll(){ renderStats(); renderInsights(); renderSortBar(); renderList(); if(view==="artists") renderArtists(); }
+
+// ── Artists view ─────────────────────────────────────────────
+function setView(v){
+  view=v;
+  $("tab-songs").classList.toggle("active", v==="songs");
+  $("tab-artists").classList.toggle("active", v==="artists");
+  $("songs-page").classList.toggle("hidden", v!=="songs");
+  $("artists-page").classList.toggle("hidden", v!=="artists");
+  if(v==="artists") renderArtists();
+}
+
+function artistAggregates(){
+  const groups={};
+  songs.forEach(s=>{
+    const k=(s.artist&&s.artist.trim())?s.artist.trim():"(No artist)";
+    (groups[k]=groups[k]||[]).push(s);
+  });
+  return Object.keys(groups).map(name=>{
+    const list=groups[name], n=list.length;
+    const avg=k=>list.reduce((a,s)=>a+Number(s[k]),0)/n;
+    const dims={}; DIMENSIONS.forEach(d=>dims[d.key]=avg(d.key));
+    const overall=DIMENSIONS.reduce((a,d)=>a+dims[d.key],0)/DIMENSIONS.length;
+    return { name, n, dims, overall };
+  });
+}
+
+function renderArtists(){
+  const metrics=[{v:"overall",l:"Overall"}].concat(DIMENSIONS.map(d=>({v:d.key,l:d.label}))).concat([{v:"count",l:"Songs"}]);
+  const ctl=$("artist-controls");
+  ctl.innerHTML=`
+    <div class="sort-bar"><span class="sort-label">Rank by</span>
+      <div class="chips">${metrics.map(m=>`<button class="chip ${artistMetric===m.v?"active":""}" data-metric="${m.v}">${m.l}</button>`).join("")}</div></div>
+    <div class="sort-bar"><span class="sort-label">Min songs</span>
+      <div class="chips">${[1,2,3].map(n=>`<button class="chip ${minSongs===n?"active":""}" data-min="${n}">${n}+</button>`).join("")}</div></div>`;
+  ctl.querySelectorAll("[data-metric]").forEach(b=>b.addEventListener("click",()=>{artistMetric=b.dataset.metric;renderArtists();}));
+  ctl.querySelectorAll("[data-min]").forEach(b=>b.addEventListener("click",()=>{minSongs=Number(b.dataset.min);renderArtists();}));
+
+  const el=$("artist-list");
+  let rows=artistAggregates().filter(a=>a.n>=minSongs);
+  if(!rows.length){ el.innerHTML=`<div class="empty">No artists with ${minSongs}+ ${minSongs===1?"song":"songs"} yet.</div>`; return; }
+  const val=a=> artistMetric==="count" ? a.n : (artistMetric==="overall" ? a.overall : a.dims[artistMetric]);
+  rows.sort((a,b)=> (val(b)-val(a)) || (b.n-a.n) || a.name.localeCompare(b.name));
+  const metricLabel = artistMetric==="count" ? "songs" : (metrics.find(m=>m.v===artistMetric).l.toLowerCase());
+
+  el.innerHTML=rows.map((a,i)=>{
+    const v = val(a);
+    const isCount = artistMetric==="count";
+    const badgeVal = isCount ? a.n : fmt(v);
+    const badgeColor = isCount ? "var(--cream)" : scoreHue(v);
+    return `<article class="song">
+      <div class="rank">${i+1}</div>
+      <div class="song-main">
+        <div class="song-head"><span class="song-title">${esc(a.name)}</span><span class="song-artist">${a.n} ${a.n===1?"song":"songs"}</span></div>
+        <div class="breakdown">${DIMENSIONS.map(d=>`<div><div class="bd-top"><span class="bd-label">${d.label}</span><span class="bd-val" style="color:${d.color}">${fmt(a.dims[d.key])}</span></div>
+          <div class="bd-track"><div class="bd-fill" style="width:${a.dims[d.key]*5}%; background:${d.color}"></div></div></div>`).join("")}</div>
+      </div>
+      <div class="score-col"><div class="badge" style="border-color:${badgeColor}; color:${badgeColor}">${badgeVal}</div>
+        <div class="total-cap" style="text-transform:uppercase; font-size:10px; letter-spacing:.1em; color:var(--muted)">${metricLabel}</div></div>
+    </article>`;
+  }).join("");
+}
 
 // ── Insights: radar + correlation heatmap ───────────────────
 const getSong = id => songs.find(s=>s.id===id);
@@ -511,6 +585,8 @@ $("login-btn").addEventListener("click", async () => {
 });
 $("login-pass").addEventListener("keydown", e => { if(e.key==="Enter") $("login-btn").click(); });
 $("signout").addEventListener("click", () => { clearSession(); songs=[]; showLogin(); });
+$("tab-songs").addEventListener("click", () => setView("songs"));
+$("tab-artists").addEventListener("click", () => setView("artists"));
 
 // boot: resume session if valid, else login
 (async function boot(){
