@@ -158,8 +158,8 @@
         <input type="text" id="title" placeholder="Song title" maxlength="70" />
         <span class="counter" id="counter">0/70</span>
       </div>
-      <div id="artist-wrap"><input type="text" id="artist" placeholder="Artist" /></div>
-      <div id="album-wrap"><input type="text" id="album" placeholder="Album" /></div>
+      <div id="artist-wrap"><input type="text" id="artist" placeholder="Artist" list="artist-options" autocomplete="off" /><datalist id="artist-options"></datalist></div>
+      <div id="album-wrap"><input type="text" id="album" placeholder="Album" list="album-options" autocomplete="off" /><datalist id="album-options"></datalist></div>
     </div>
     <div class="sliders" id="sliders"></div>
     <div class="form-footer">
@@ -400,7 +400,14 @@ function renderList(){
     b._t=setTimeout(()=>{ b.dataset.armed="0"; b.textContent="Delete"; b.classList.remove("armed"); }, 3000);
   }));
 }
-function renderAll(){ renderStats(); renderInsights(); renderSortBar(); renderList(); if(view==="artists") renderArtists(); }
+function renderAll(){ refreshDatalists(); renderStats(); renderInsights(); renderSortBar(); renderList(); if(view==="artists") renderArtists(); }
+
+function refreshDatalists(){
+  const fill=(id,vals)=>{ const dl=$(id); if(!dl) return;
+    dl.innerHTML=Array.from(new Set(vals)).filter(Boolean).sort((a,b)=>a.localeCompare(b)).map(v=>`<option value="${esc(v)}"></option>`).join(""); };
+  fill("artist-options", songs.map(s=>s.artist));
+  fill("album-options", songs.map(s=>s.album));
+}
 
 // ── Artists view ─────────────────────────────────────────────
 function setView(v){
